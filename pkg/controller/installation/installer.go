@@ -25,7 +25,7 @@ import (
 	"github.com/bookingcom/shipper/pkg/controller/janitor"
 )
 
-type DynamicClientBuilderFunc func(gvk *schema.GroupVersionKind, restConfig *rest.Config, cluster *shipper.Cluster) dynamic.Interface
+type DynamicClientBuilderFunc func(restConfig *rest.Config, cluster *shipper.Cluster) dynamic.Interface
 
 // Installer is an object that knows how to install Helm charts directly into
 // Kubernetes clusters.
@@ -86,30 +86,34 @@ func (i *Installer) buildResourceClient(
 	dynamicClientBuilder DynamicClientBuilderFunc,
 	gvk *schema.GroupVersionKind,
 ) (dynamic.ResourceInterface, error) {
-	dynamicClient := dynamicClientBuilder(gvk, restConfig, cluster)
 
-	// From the list of resources the target cluster knows about, find the resource for the
-	// kind of object we have at hand.
-	var resource *metav1.APIResource
-	gv := gvk.GroupVersion().String()
-	if resources, err := client.Discovery().ServerResourcesForGroupVersion(gv); err != nil {
+	resources, err := client.Discovery().ServerResourcesForGroupVersion(gvk.GroupVersion().String())
+	if err != nil {
 		return nil, err
-	} else {
-		for _, e := range resources.APIResources {
-			if e.Kind == gvk.Kind {
-				resource = &e
-				break
-			}
-		}
-		if resource == nil {
-			return nil, fmt.Errorf("resource %s not found", gvk.Kind)
-		}
 	}
 
-	// If it gets to this point, it means we have a resource, so we can create a
-	// client for it scoping to the application's namespace. The namespace can be
-	// ignored if creating, for example, objects that aren't bound to a namespace.
-	resourceClient := dynamicClient.Resource(resource, i.Release.Namespace)
+	var (
+		gvr   schema.GroupVersionResource
+		found bool
+	)
+	for _, e := range resources.APIResources {
+		if e.Kind == gvk.Kind {
+			gvr = schema.GroupVersionResource{
+				Group:    e.Group,
+				Version:  e.Version,
+				Resource: e.Name,
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("failed to discover GVR for GVK %v", gvk)
+	}
+
+	dynamicClient := dynamicClientBuilder(restConfig, cluster)
+	resourceClient := dynamicClient.Resource(gvr).Namespace(i.Release.Namespace)
+
 	return resourceClient, nil
 }
 
@@ -501,7 +505,7 @@ func (i *Installer) installManifests(
 		case *corev1.Service:
 			// Copy over clusterIP from existing object's .spec to the
 			// rendered one.
-			if clusterIP, ok := unstructured.NestedString(existingUnstructuredObj, "spec", "clusterIP"); ok {
+			if clusterIP, ok, _ := unstructured.NestedString(existingUnstructuredObj, "spec", "clusterIP"); ok {
 				unstructured.SetNestedField(newUnstructuredObj, clusterIP, "spec", "clusterIP")
 			}
 		}
