@@ -354,6 +354,8 @@ func (c *Controller) processApplication(app *shipper.Application) (err error) {
 
 	// clean up excessive releases regardless of exit path
 	defer func() {
+		// errors := shippererrors.NewMultiError()
+		// TODO(jgreff): unfortunately this swallows errors :(
 		app.Status.History = apputil.ReleasesToApplicationHistory(appReleases)
 		err = c.cleanUpReleasesForApplication(app, appReleases)
 	}()
